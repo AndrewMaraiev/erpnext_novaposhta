@@ -2,6 +2,7 @@ from __future__ import unicode_literals
 import json
 import requests
 import frappe
+import time
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
@@ -10,12 +11,10 @@ from erpnext.stock.doctype import shipment, shipment_parcel
 from erpnext_shipping.erpnext_shipping.doctype.novaposhta.np_client import NovaPoshtaApi
 from erpnext_shipping.erpnext_shipping.doctype.novaposhta_settings.novaposhta_settings import NovaPoshtaSettings
 from erpnext_shipping.erpnext_shipping.utils import show_error_alert
+from requests import post, get
+from time import sleep
 
 NOVAPOSHTA_PROVIDER = 'NovaPoshta'
-
-
-class NovaPoshta(Document):
-    pass
 
 
 class NovaPoshtaUtils:
@@ -36,10 +35,49 @@ class NovaPoshtaUtils:
         kwargs['modelName'] = 'InternetDocument'
         kwargs['calledMethod'] = 'getDocumentPrice'
         kwargs['apiKey'] = self.api_key
-        frappe.msgprint(str(kwargs))
-        url = self.api_endpoint #+ 'InternetDocument/GetDocumentPrice'
-        response = requests.post(url, data=json.dumps(kwargs), headers=headers)
-        return response.text
+
+        form=kwargs
+        pickup_warehouse = self.get_warehoouse_ref(
+            city=form['pickup_address']['city'],
+            title=form['pickup_address']['address_title']
+        )['data'][0] 
+        sleep(1)
+
+        delivery_warehouse = self.get_warehoouse_ref(
+            city=form['delivery_address']['city'],
+            title=form['delivery_address']['address_title']
+        )['data'][0]
+        
+        delivery_price_data = self.calculate_delivery_price(
+            city_sender=pickup_warehouse['SettlementRef'],
+            city_recipient=delivery_warehouse['SettlementRef'],
+            weight='10',
+            cost=form['value_of_goods'],
+            seats_amount = '1',
+            pack_count = '1'
+        )
+        
+        data = delivery_price_data.get('data', [])
+        
+        if len(data) == 0:
+            return []
+        
+        result = {
+            'Nova Poshta service':[
+                    {
+                        'service_type_name': 'Nova Poshta',
+                        'carrier_name': 'Nova Poshta',
+                        'service_provider': 'NP',
+                        'service_name': 'WarehouseWarehouse delivery',
+                        'Price': data[0]['Cost']
+                    }
+                ]
+        }
+        
+        # url = self.api_endpoint #+ 'InternetDocument/GetDocumentPrice'
+        # response = requests.post(url, data=json.dumps(kwargs), headers=headers)
+        return result
+        
 
     def get_novaposhta_shipping_rates(self, args):
         novaposhta = NovaPoshtaUtils()
@@ -51,7 +89,7 @@ class NovaPoshtaUtils:
         else:
             frappe.throw(_('Shipment Parcel data not found'))
 
-        shipping_rates = novaposhta.novaposhta_api.get_shipping_rates(
+        shipping_rates = novaposhta.novaposhta_api.get_novaposhta_shipping_rates(
             recipient_city_ref=args.get('recipient_city_ref'),
             sender_city_ref=args.get('sender_city_ref'),
             service_type=args.get('service_type'),
@@ -60,6 +98,45 @@ class NovaPoshtaUtils:
             cost_of_goods=flt(args.get('value_of_goods'))
         )
         return shipping_rates
+    
+    def calculate_delivery_price(self, city_sender, city_recipient, weight, cost, seats_amount = '1', pack_count = '1'):
+        body = {
+            "apiKey": self.api_key,
+            "modelName": "InternetDocument",
+            "calledMethod": "getDocumentPrice",
+            "methodProperties": {
+                "CitySender" : city_sender,
+                "CityRecipient" : city_recipient,
+                "Weight" : weight,
+                "ServiceType" : "WarehouseWarehouse",
+                "Cost" : cost,
+                "CargoType" : "Cargo",
+                "SeatsAmount" : seats_amount,
+                "RedeliveryCalculate" : {
+                    "CargoType":"Money",
+                    "Amount":"100"
+                },
+                "PackCount" : pack_count
+            }
+        }
+        response = post(self.api_endpoint, json=body)
+        return response.json()
+    
+    def get_warehoouse_ref(self, city, title):
+        body = {
+            "apiKey": self.api_key,
+            "modelName": "Address",
+            "calledMethod": "getWarehouses",
+            "methodProperties": {
+                "CityName" : city,
+                "Page" : "1",
+                "Limit" : "50",
+                "Language" : "UA",
+                "FindByString": title
+            }
+        }
+        response = post(self.api_endpoint, json=body)
+        return response.json()
 
 
 @frappe.whitelist()
@@ -87,7 +164,8 @@ def fetch_shipping_rates(args):
     return shipment_prices
 
     
-def get_create_shipment(self, shipment_data):
+def create_shipment(self, shipment_data):
+    try:
         # Create a shipment
         novaposhta = NovaPoshtaUtils()
         shipment_parcel_data = shipment_data.get('shipment_parcel')
@@ -98,232 +176,98 @@ def get_create_shipment(self, shipment_data):
         else:
             frappe.throw(_('Shipment Parcel data not found'))
 
-        shipment = novaposhta.novaposhta_api.create_shipment(
-            recipient_city_ref=shipment_data.get('recipient_city_ref'),
-            sender_city_ref=shipment_data.get('sender_city_ref'),
-            service_type=shipment_data.get('service_type'),
-            cargo_type=shipment_data.get('cargo_type'),
-            weight=flt(shipment_parcel_data.get('weight')),
-            cost_of_goods=flt(shipment_data.get('value_of_goods')),
-            recipient_name=shipment_data.get('recipient_name'),
-            recipient_phone=shipment_data.get('recipient_phone'),
-            recipient_email=shipment_data.get('recipient_email'),
-            recipient_address=shipment_data.get('recipient_address'),
-            recipient_warehouse_ref=shipment_data.get('recipient_warehouse_ref'),
-            sender_name=shipment_data.get('sender_name'),
-            sender_phone=shipment_data.get('sender_phone'),
-            sender_email=shipment_data.get('sender_email'),
-            sender_address=shipment_data.get('sender_address'),
-            sender_warehouse_ref=shipment_data.get('sender_warehouse_ref'),
-            description=shipment_data.get('description')
-        )
-        return shipment
-        
+        shipment_doc = shipment_data()
+        shipment_doc.update({
+            'shipment_type': 'Outgoing',
+            'customer': shipment_data.get('customer'),
+            'customer_address': shipment_data.get('customer_address'),
+            'from_warehouse': shipment_data.get('from_warehouse'),
+            'to_warehouse': shipment_data.get('to_warehouse'),
+            'to_address': shipment_data.get('to_address'),
+            'to_city': shipment_data.get('to_city'),
+            'to_state': shipment_data.get('to_state'),
+            'to_country': shipment_data.get('to_country'),
+            'to_pincode': shipment_data.get('to_pincode'),
+            'total_weight': flt(shipment_parcel_data.get('weight')),
+            'grand_total': flt(shipment_data.get('value_of_goods')),
+            'nova_poshta_tracking_number': 'IntDocNumber',
+            'nova_poshta_provider': NOVAPOSHTA_PROVIDER
+        })
+        shipment_doc.save()
+
+        shipment_parcel_doc = shipment_parcel_data()
+        shipment_parcel_doc.update({
+            'parenttype': 'Shipment',
+            'parentfield': 'shipment_parcel',
+            'parent': shipment_doc.name,
+            'item_code': shipment_data.get('item_code'),
+            'qty': shipment_data.get('qty'),
+            'weight': flt(shipment_parcel_data.get('weight')),
+            'value': flt(shipment_data.get('value_of_goods'))
+        })
+        shipment_parcel_doc.save()
+
+        shipment_doc.reload()
+
+        shipment_doc.shipment_parcel = [shipment_parcel_doc]
+
+        shipment_doc.save()
+
+        shipment_doc.submit()
+
+        return shipment_doc
+    except Exception as e:
+        frappe.log_error('Error creating shipment: {}'.format(str(e)))
+        frappe.throw(_('Error creating shipment: {}'.format(str(e))))
+
+
+@frappe.whitelist()
+def create_novaposhta_shipment(shipment_data):
+    try:
+        # Create a shipment
+        shipment_data = json.loads(shipment_data)
+        shipment_doc = create_shipment(None, shipment_data)
+
+        # Create a shipment in Nova Poshta
+        novaposhta = NovaPoshtaUtils()
+        shipment_parcel_data = shipment_data.get('shipment_parcel')
+        if shipment_parcel_data:
+            shipment_parcel_data = json.loads(shipment_parcel_data)
+        if shipment_parcel_data:
+            shipment_parcel_data = shipment_parcel_data[0]
+        else:
+            frappe.throw(_('Shipment Parcel data not found'))
+
+        shipment = novaposhta.create_novaposhta_shipment({
+            'recipient_city_ref': shipment_data.get('to_city_ref'),
+            'sender_city_ref': shipment_data.get('from_city_ref'),
+            'service_type': shipment_data.get('service_type'),
+            'cargo_type': shipment_data.get('cargo_type'),
+            'shipment_parcel': [shipment_parcel_data],
+            'value_of_goods': shipment_data.get('value_of_goods'),
+            'recipient_name': shipment_data.get('customer'),
+            'recipient_phone': shipment_data.get('customer_phone'),
+            'recipient_email': shipment_data.get('customer_email'),
+            'recipient_address': shipment_data.get('to_address'),
+            'recipient_warehouse_ref': shipment_data.get('to_warehouse_ref'),
+            'sender_name': shipment_data.get('from_address_name'),
+            'sender_phone': shipment_data.get('from_address_phone'),
+            'sender_email': shipment_data.get('from_address_email'),
+            'sender_address': shipment_data.get('from_address'),
+            'sender_warehouse_ref': shipment_data.get('from_warehouse_ref'),
+            'description': shipment_data.get('description')
+        })
+
+        # Update the shipment with the Nova Poshta tracking number
+        shipment_doc.nova_poshta_tracking_number = shipment.get('IntDocNumber')
+        shipment_doc.save()
+
+        # Print the shipping label
+        if novaposhta.print_uri:
+            novaposhta.novaposhta_api.print_label(shipment.get('IntDocNumber'), novaposhta.print_uri)
+
+        return shipment_doc
+    except Exception as e:
+        frappe.log_error('Error creating Nova Poshta shipment: {}'.format(str(e)))
+        frappe.throw(_('Error creating Nova Poshta shipment: {}'.format(str(e))))
     
-        
-    
-
-        
-        
-    
-    
-    # def get_available_services(self, **kwargs):
-    #    print(kwargs)
-    #   # kwargs to string
-    #    kstring = json.dumps(kwargs)
-    #    client = NovaPoshtaApi(api_key=self.api_key)
-    #    warehouses = client.address.get_warehouses()
-    #    frappe.throw(warehouses.text)
-        
-#     def get_available_services(self, **kwargs):
-#         print(kwargs)
-#         # kwargs to string
-#         kstring = json.dumps(kwargs)
-#         client = NovaPoshtaApi(api_key=self.api_key)
-#         cities = client.address.get_cities()
-#         frappe.throw(cities.text)
-        
-#         pickup_address = kwargs['pickup_address']
-#         delivery_address = kwargs['delivery_address']
-        
-#         frappe.throw(kstring)
-#         # Retrieve rates at PackLink from specification stated.
-#         parcel_list = self.get_parcel_list(json.loads(kwargs))
-#         shipment_parcel_params = self.get_formatted_parcel_params(parcel_list)
-#         url = self.get_formatted_request_url(pickup_address, delivery_address, shipment_parcel_params)
-
-#         if not self.api_key or not self.enabled:
-#             return []
-
-#         try:
-#             responses = requests.get(url, headers={'Authorization': self.api_key})
-#             responses_dict = json.loads(responses.text)
-#             # If an error occured on the api. Show the error message
-#             if 'messages' in responses_dict:
-#                 error_message = str(responses_dict['messages'][0]['message'])
-#                 frappe.throw(error_message, title=_("PackLink"))
-
-#             available_services = []
-#             for response in responses_dict:
-#                 # display services only if available on pickup date
-#                 if self.parse_pickup_date(pickup_date) in response['available_dates'].keys():
-#                     available_service = self.get_service_dict(response)
-#                     available_services.append(available_service)
-
-#             if responses_dict and not available_services:
-#                 # got a response but no service available for given date
-#                 frappe.throw(_("No Services available for {0}").format(pickup_date), title=_("PackLink"))
-
-#             return available_services
-#         except Exception:
-#             show_error_alert("fetching Packlink prices")
-
-#         return []
-
-#     # in NovaPoshtaUtils module
-# class NovaPoshtaUtils:  
-    
-#     def get_available_services(self, pickup_from_type, delivery_to_type, pickup_address, delivery_address, shipment_parcel):
-#         # Get available services from Nova Poshta.
-#         if not pickup_from_type or not delivery_to_type:
-#             return []
-
-#         if pickup_from_type == 'Warehouse' and delivery_to_type == 'Warehouse':
-#             return [NOVAPOSHTA_PROVIDER]
-
-#         return []
-        
-        
-#     def delivery_to_type(self):
-#         return 'Warehouse'
-        
-            
-#     def create_shipmentt(self, shipment, shipment_parcel):
-#         # Create shipment at Nova Poshta from specification stated.
-#         if not self.enabled or not self.api_key or not self.api_id:
-#             return []
-
-#         try:
-#             url = self.api_endpoint
-#             headers = {'content-type': 'application/json'}
-#             data = {
-#                 "apiKey": self.api_key,
-#                 "modelName": "InternetDocument",
-#                 "calledMethod": "save",
-#                 "methodProperties": {
-#                     "NewAddress": 1,
-#                     "PayerType": "Sender",
-#                     "PaymentMethod": "Cash",
-#                     "DateTime": "2020-04-30T00:00:00",
-#                     "CargoType": "Cargo",
-#                     "VolumeGeneral": "0.0004",
-#                     "Weight": shipment_parcel.weight,
-#                     "ServiceType": "WarehouseWarehouse",
-#                     "SeatsAmount": "1",
-#                     "Description": "Documents",
-#                     "Cost": shipment_parcel.cost,
-#                     "CitySender": frappe.db.get_value('Address', shipment.sender_address, 'city'),
-#                     "Sender": frappe.db.get_value('Address', shipment.sender_address, 'warehouse'),
-#                     "SenderAddress": frappe.db.get_value('Address', shipment.sender_address, 'warehouse_address'),
-#                     "ContactSender": frappe.db.get_value('Address', shipment.sender_address, 'contact_person'),
-#                     "SendersPhone": frappe.db.get_value('Address', shipment.sender_address, 'phone'),
-#                     "CityRecipient": frappe.db.get_value('Address', shipment_parcel.recipient_address, 'city'),
-#                     "Recipient": frappe.db.get_value('Address', shipment_parcel.recipient_address, 'warehouse'),
-#                     "RecipientAddress": frappe.db.get_value('Address', shipment_parcel.recipient_address, 'warehouse_address'),
-#                     "ContactRecipient": frappe.db.get_value('Address', shipment_parcel.recipient_address, 'contact_person'),
-#                     "RecipientsPhone": frappe.db.get_value('Address', shipment_parcel.recipient_address, 'phone')
-#                 }
-#             }
-#             response = requests.post(url, data=json.dumps(data), headers=headers)
-#             if response.status_code == 200:
-#                 response = response.json()
-#                 if response['success']:
-#                     return response['data']
-#                 else:
-#                     frappe.throw(response['errors'])
-#             else:
-#                 frappe.throw(response.text)
-#         except Exception as e:
-#             frappe.throw(e)
-            
-#     def get_lable(self, shipment, shipment_parcel):
-#         # Create shipment at Nova Poshta from specification stated.
-#         if not self.enabled or not self.api_key or not self.api_id:
-#             return []
-
-#         try:
-#             url = self.api_endpoint
-#             headers = {'content-type': 'application/json'}
-#             data = {
-#                 "apiKey": self.api_key,
-#                 "modelName": "InternetDocument",
-#                 "calledMethod": "printDocument",
-#                 "methodProperties": {
-#                     "DocumentRefs": [
-#                         shipment_parcel.novaposhta_id
-#                     ]
-#                 }
-#             }
-#             response = requests.post(url, data=json.dumps(data), headers=headers)
-#             if response.status_code == 200:
-#                 response = response.json()
-#                 if response['success']:
-#                     return response['data']
-#                 else:
-#                     frappe.throw(response['errors'])
-#             else:
-#                 frappe.throw(response.text)
-#         except Exception as e:
-#             frappe.throw(e)
-            
-#     def get_formatted_request_url(request):
-#             """
-#             Returns formatted request url.
-#             """
-#             return '{0}?{1}'.format(requests.request.url, requests.request.body)
-       
-#     def get_cities(self):
-#         """
-#         Returns all cities.
-#         """
-#         # call api by using corresponding models
-#         client = NovaPoshtaApi(api_key=self.api_key)
-#         cities = client.address.get_cities()
-#         # models can be accessed as client properties
-#         print(cities.json())
-#         return cities.json()
-    
-#     def get_warehouses(self, city): 
-#         client = NovaPoshtaApi(api_key=self.api_key)
-#         warehouses = client.address.get_warehouses(city_ref=city)
-#         # models can be accessed as client properties
-#         print(warehouses.json())
-#         return warehouses.json()
-    
-#     def get_delicery_to_type(self):
-#         """
-#         Returns all cities.
-#         """
-#         # call api by using corresponding models
-#         client = NovaPoshtaApi(api_key=self.api_key)
-#         cities = client.address.get_cities()
-#         # models can be accessed as client properties
-#         print(cities.json())
-#         return cities.json()
-    
-
-
-
-
-
-#     def get_areas(self):
-#         """
-#         Returns all areas.
-#         """
-#         # call api by using corresponding models
-#         client = NovaPoshtaApi(api_key=self.api_key)
-#         areas = client.address.get_areas()  # models can be accessed as client properties
-#         print(areas.json())
-#         return areas.json()
-
-
