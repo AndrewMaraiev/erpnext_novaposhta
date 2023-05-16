@@ -51,9 +51,15 @@ def fetch_shipping_rates(pickup_from_type, delivery_to_type, pickup_address_name
 			pickup_contact=pickup_contact,
 			delivery_contact=delivery_contact,
 		) or [] 
-		frappe.msgprint(str(novaposhta_prices))
+
+		# frappe.msgprint(str(novaposhta_prices))
 		novaposhta_prices = match_parcel_service_type_carrier(novaposhta_prices, ['carrier', 'carrier_name'])
-		shipment_prices = shipment_prices + list(novaposhta_prices)
+		shipment_prices = shipment_prices + novaposhta_prices['Nova Poshta service']
+		frappe.msgprint(str(shipment_prices))
+		frappe.msgprint('aaa')
+  
+  
+		
   
 
 	if packlink_enabled:
@@ -77,7 +83,7 @@ def fetch_shipping_rates(pickup_from_type, delivery_to_type, pickup_address_name
 	
 	if not shipment_prices: # check if shipment_prices is empty
 		return []
-	
+	frappe.msgprint(str(shipment_prices))
 	# shipment_prices = sorted(shipment_prices, key=lambda k:k['total_price'])
 	return shipment_prices
 
