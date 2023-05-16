@@ -47,6 +47,9 @@ def match_parcel_service_type_carrier(prices, keys):
 
     for service_type in prices:
         for carrier in prices[service_type]:
+            frappe.msgprint(str(type(carrier)))
+            frappe.msgprint(str(carrier))
+            
             if all([carrier.get(key) for key in keys]):
                 service_type_name = carrier.get('service_type_name')
                 carrier_name = carrier.get('carrier_name')
