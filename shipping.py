@@ -2,6 +2,7 @@
 # Copyright (c) 2020, Frappe Technologies and contributors
 # For license information, please see license.txt
 from __future__ import unicode_literals
+from erpnext.stock.doctype.delivery_note.test_delivery_note import create_delivery_note
 import frappe
 import json
 from six import string_types
@@ -13,203 +14,215 @@ from erpnext_shipping.erpnext_shipping.doctype.novaposhta.novaposhta import NOVA
 from erpnext_shipping.erpnext_shipping.doctype.packlink.packlink import PACKLINK_PROVIDER, PackLinkUtils
 from erpnext_shipping.erpnext_shipping.doctype.sendcloud.sendcloud import SENDCLOUD_PROVIDER, SendCloudUtils
 import requests
+from pprint import pprint
+
+@frappe.whitelist()
+def get_areas():
+    areas = NovaPoshtaUtils().get_areas()
+    return areas
 
 @frappe.whitelist()
 def fetch_shipping_rates(pickup_from_type, delivery_to_type, pickup_address_name, delivery_address_name,
-	shipment_parcel, description_of_content, pickup_date, value_of_goods,
-	pickup_contact_name=None, delivery_contact_name=None):
-	# Return Shipping Rates for the various Shipping Providers
-	shipment_prices = []
-	novaposhta_enabled = frappe.db.get_single_value('NovaPoshta','enabled')
-	packlink_enabled = frappe.db.get_single_value('Packlink','enabled')
-	sendcloud_enabled = frappe.db.get_single_value('SendCloud','enabled')
-	pickup_address = get_address(pickup_address_name)
-	delivery_address = get_address(delivery_address_name)
+                         shipment_parcel, description_of_content, pickup_date, value_of_goods,
+                         pickup_contact_name=None, delivery_contact_name=None):
+    # Return Shipping Rates for the various Shipping Providers
+    shipment_prices = []
+    novaposhta_enabled = frappe.db.get_single_value('NovaPoshta', 'enabled')
+    packlink_enabled = frappe.db.get_single_value('Packlink', 'enabled')
+    sendcloud_enabled = frappe.db.get_single_value('SendCloud', 'enabled')
+    pickup_address = get_address(pickup_address_name)
+    delivery_address = get_address(delivery_address_name)
 
-	if novaposhta_enabled:
-		pickup_contact = None
-		delivery_contact = None
-		if pickup_from_type != 'Company':
-			pickup_contact = get_contact(pickup_contact_name)
-		else:
-			pickup_contact = get_company_contact(user=pickup_contact_name)
+    if novaposhta_enabled:
+        pickup_contact = None
+        delivery_contact = None
+        if pickup_from_type != 'Company':
+            pickup_contact = get_contact(pickup_contact_name)
+        else:
+            pickup_contact = get_company_contact(user=pickup_contact_name)
 
-		if delivery_to_type != 'Company':
-			delivery_contact = get_contact(delivery_contact_name)
-		else:
-			delivery_contact = get_company_contact(user=pickup_contact_name)
+        if delivery_to_type != 'Company':
+            delivery_contact = get_contact(delivery_contact_name)
+        else:
+            delivery_contact = get_company_contact(user=delivery_contact_name)
 
-		novaposhta = NovaPoshtaUtils()
-		novaposhta_prices = novaposhta.get_available_services(
-			delivery_to_type=delivery_to_type,
-			pickup_address=pickup_address,
-			delivery_address=delivery_address,
-			shipment_parcel=shipment_parcel,
-			description_of_content=description_of_content,
-			pickup_date=pickup_date,
-			value_of_goods=value_of_goods,
-			pickup_contact=pickup_contact,
-			delivery_contact=delivery_contact,
-		) or [] 
+        novaposhta = NovaPoshtaUtils()  # Замініть на відповідний клас NovaPoshtaUtils
+        novaposhta_prices = novaposhta.get_available_services(
+            delivery_to_type=delivery_to_type,
+            pickup_address=pickup_address,
+            delivery_address=delivery_address,
+            shipment_parcel=shipment_parcel,
+            description_of_content=description_of_content,
+            pickup_date=pickup_date,
+            value_of_goods=value_of_goods,
+            pickup_contact=pickup_contact,
+            delivery_contact=delivery_contact,
+        ) or []
+        shipment_prices = shipment_prices + novaposhta_prices
 
-		# frappe.msgprint(str(novaposhta_prices))
-		novaposhta_prices = match_parcel_service_type_carrier(novaposhta_prices, ['carrier', 'carrier_name'])
-		shipment_prices = shipment_prices + novaposhta_prices['Nova Poshta service']
-		frappe.msgprint(str(shipment_prices))
-		frappe.msgprint('aaa')
-  
-  
-		
-  
+    # if packlink_enabled:
+    #     packlink = PackLinkUtils()  # Замініть на відповідний клас PackLinkUtils
+    #     packlink_prices = packlink.get_available_services(
+    #         pickup_address=pickup_address,
+    #         delivery_address=delivery_address,
+    #         shipment_parcel=shipment_parcel,
+    #         pickup_date=pickup_date
+    #     ) or []
+    #     shipment_prices = shipment_prices + packlink_prices
 
-	if packlink_enabled:
-		packlink = PackLinkUtils()
-		packlink_prices = packlink.get_available_services(
-			pickup_address=pickup_address,
-			delivery_address=delivery_address,
-			shipment_parcel=shipment_parcel,
-			pickup_date=pickup_date
-		) or []
-		packlink_prices = match_parcel_service_type_carrier(packlink_prices, ['carrier_name', 'carrier'])
-		shipment_prices = shipment_prices + packlink_prices
+    # if sendcloud_enabled and pickup_from_type == 'Company':
+    #     sendcloud = SendCloudUtils()  # Замініть на відповідний клас SendCloudUtils
+    #     sendcloud_prices = sendcloud.get_available_services(
+    #         delivery_address=delivery_address,
+    #         shipment_parcel=shipment_parcel
+    #     ) or []
+    #     shipment_prices = shipment_prices + sendcloud_prices[:4]  # remove after fixing scroll issue
 
-	if sendcloud_enabled and pickup_from_type == 'Company':
-		sendcloud = SendCloudUtils()
-		sendcloud_prices = sendcloud.get_available_services(
-			delivery_address=delivery_address,
-			shipment_parcel=shipment_parcel
-		) or []
-		shipment_prices = shipment_prices + sendcloud_prices[:4] # remove after fixing scroll issue
-	
-	if not shipment_prices: # check if shipment_prices is empty
-		return []
-	frappe.msgprint(str(shipment_prices))
-	# shipment_prices = sorted(shipment_prices, key=lambda k:k['total_price'])
-	return shipment_prices
+    if not shipment_prices:  # check if shipment_prices is empty
+        return []
+    return shipment_prices
+
 
 @frappe.whitelist()
-def create_shipment(shipment, pickup_from_type, delivery_to_type, pickup_address_name,
-		delivery_address_name, shipment_parcel, description_of_content, pickup_date,
-		value_of_goods, service_data, shipment_notific_email=None, tracking_notific_email=None,
-		pickup_contact_name=None, delivery_contact_name=None, delivery_notes=[]):
-	# Create Shipment for the selected provider
-	service_info = json.loads(service_data)
-	shipment_info, pickup_contact,  delivery_contact = None, None, None
-	pickup_address = get_address(pickup_address_name)
-	delivery_address = get_address(delivery_address_name)
+def create_shipment(shipment, pickup_from_type, delivery_to_type, pickup_address,
+                    delivery_address, shipment_parcel, description_of_content, pickup_date,
+                    value_of_goods, service_data, shipment_notific_email=None, tracking_notific_email=None,
+                    pickup_contact_name=None, delivery_contact_name=None, delivery_notes=[]):
+    # Create Shipment for the selected provider
+    service_info = json.loads(service_data)
+    shipment_info = None
+    try:
+        novaposhta = NovaPoshtaUtils()
+        sender_name = ''  # Set sender name
+        sender_phone = ''  # Set sender phone
+        sender_address_warehouse_ref = {'Ref': pickup_address}  # Set sender warehouse address reference
+        recipient_name = ''  # Set recipient name
+        recipient_phone = ''  # Set recipient phone
+        recipient_address_warehouse_ref = {'Ref': delivery_address}  # Set recipient warehouse address reference
+        weight = shipment_parcel.get('Weight', 0)  # Set weight
+        description = description_of_content  # Set description
+        cost = value_of_goods  # Set cost
+        print('sender_name', sender_name)   
+        shipment_info = novaposhta.create_shipment(
+            sender_name,
+            sender_phone,
+            sender_address_warehouse_ref['Ref'],
+            recipient_name,
+            recipient_phone,
+            recipient_address_warehouse_ref['Ref'],
+            weight,
+            description,
+            cost
+        )
+        print('shipment_info', shipment_info)
+    except Exception as e:
+        frappe.log_error(str(e))
+    
+    pickup_contact = None
+    delivery_contact = None
+    
+    shipment_doc = frappe.get_doc('Shipment', shipment)
+    
+    if pickup_from_type != 'Company':
+        pickup_contact = get_contact(pickup_contact_name)
+    else:
+        pickup_contact = get_company_contact(user=pickup_contact_name)
 
-	if pickup_from_type != 'Company':
-		pickup_contact = get_contact(pickup_contact_name)
-	else:
-		pickup_contact = get_company_contact(user=pickup_contact_name)
+    if delivery_to_type != 'Company':
+        delivery_contact = get_contact(delivery_contact_name)
+    else:
+        delivery_contact = get_company_contact(user=delivery_contact_name)
 
-	if delivery_to_type != 'Company':
-		delivery_contact = get_contact(delivery_contact_name)
-	else:
-		delivery_contact = get_company_contact(user=pickup_contact_name)
+    if shipment_doc.carrier_service == 'NovaPoshta':
+        novaposhta = NovaPoshtaUtils()
+        try:
+            shipment_info = novaposhta.create_shipment(
+                pickup_address=pickup_address,
+                delivery_address=delivery_address,
+                shipment_parcel=shipment_parcel,
+                description_of_content=description_of_content,
+                pickup_date=pickup_date,
+                value_of_goods=value_of_goods,
+                service_info=service_info,
+                pickup_contact=pickup_contact,
+                delivery_contact=delivery_contact,
+                # shipment_notific_email=shipment_notific_email,
+                # tracking_notific_email=tracking_notific_email,
+                # delivery_notes=delivery_notes
+            )
+            print('shipment_info', shipment_info)
+        except Exception as e:
+            frappe.log_error(str(e))
 
-	if service_info['service_provider'] == NOVAPOSHTA_PROVIDER:
-		novaposhta = NovaPoshtaUtils()
-		shipment_info = novaposhta.create_shipment(
-			pickup_address=pickup_address,
-			delivery_address=delivery_address,
-			shipment_parcel=shipment_parcel,
-			description_of_content=description_of_content,
-			pickup_date=pickup_date,
-			value_of_goods=value_of_goods,
-			pickup_contact=pickup_contact,
-			delivery_contact=delivery_contact,
-			service_info=service_info
-		)
+    # if shipment == 'Packlink service':
+    #     packlink = PackLinkUtils()  # Замініть на відповідний клас PackLinkUtils
+    #     shipment_info = packlink.create_shipment(
+    #         pickup_address=pickup_address,
+    #         delivery_address=delivery_address,
+    #         shipment_parcel=shipment_parcel,
+    #         description_of_content=description_of_content,
+    #         pickup_date=pickup_date,
+    #         value_of_goods=value_of_goods,
+    #         service_info=service_info,
+    #         pickup_contact=pickup_contact,
+    #         delivery_contact=delivery_contact,
+    #         shipment_notific_email=shipment_notific_email,
+    #         tracking_notific_email=tracking_notific_email,
+    #         delivery_notes=delivery_notes
+    #     )
 
-	if service_info['service_provider'] == PACKLINK_PROVIDER:
-		packlink = PackLinkUtils()
-		shipment_info = packlink.create_shipment(
-			pickup_address=pickup_address,
-			delivery_address=delivery_address,
-			shipment_parcel=shipment_parcel,
-			description_of_content=description_of_content,
-			pickup_date=pickup_date,
-			value_of_goods=value_of_goods,
-			pickup_contact=pickup_contact,
-			delivery_contact=delivery_contact,
-			service_info=service_info,
-		)
+    # if shipment == 'SendCloud service':
+    #     sendcloud = SendCloudUtils()  # Замініть на відповідний клас SendCloudUtils
+    #     shipment_info = sendcloud.create_shipment(
+    #         delivery_address=delivery_address,
+    #         shipment_parcel=shipment_parcel,
+    #         description_of_content=description_of_content,
+    #         value_of_goods=value_of_goods,
+    #         service_info=service_info,
+    #         shipment_notific_email=shipment_notific_email,
+    #         tracking_notific_email=tracking_notific_email,
+    #         delivery_notes=delivery_notes
+    #     )
 
-	if service_info['service_provider'] == SENDCLOUD_PROVIDER:
-		sendcloud = SendCloudUtils()
-		shipment_info = sendcloud.create_shipment(
-			shipment=shipment,
-			delivery_address=delivery_address,
-			shipment_parcel=shipment_parcel,
-			description_of_content=description_of_content,
-			value_of_goods=value_of_goods,
-			delivery_contact=delivery_contact,
-			service_info=service_info,
-		)
+     # Додано перевірку на `None` та виведення повідомлення
+    if shipment_info is None:
+        frappe.msgprint('Failed to create shipment for NovaPoshta')
+    else:
+        frappe.db.set_value('Shipment', shipment, 'shipment_id', shipment_info)
+        frappe.db.set_value('Shipment', shipment, 'status', 'Booked')
+        frappe.msgprint('Shipment created for NovaPoshta')
+        
+    return shipment_info
 
-	if shipment_info:
-		fields = ['service_provider', 'carrier', 'carrier_service', 'shipment_id', 'shipment_amount', 'awb_number']
-		for field in fields:
-			frappe.db.set_value('Shipment', shipment, field, shipment_info.get(field))
-		frappe.db.set_value('Shipment', shipment, 'status', 'Booked')
 
-		if delivery_notes:
-			update_delivery_note(delivery_notes=delivery_notes, shipment_info=shipment_info)
+def get_address(address_name):
+    # Get Address details based on Address Name
+    address = frappe.get_doc("Address", address_name)
+    return address
 
-	return shipment_info
 
-@frappe.whitelist()
-def print_shipping_label(service_provider, shipment_id):
-	if service_provider == NOVAPOSHTA_PROVIDER:
-		novaposhta = NovaPoshtaUtils()
-		shipping_label = novaposhta.get_label(shipment_id)
-	elif service_provider == PACKLINK_PROVIDER:
-		packlink = PackLinkUtils()
-		shipping_label = packlink.get_label(shipment_id)
-	elif service_provider == SENDCLOUD_PROVIDER:
-		sendcloud = SendCloudUtils()
-		shipping_label = sendcloud.get_label(shipment_id)
-	return shipping_label
+def get_contact(contact_name):
+    # Get Contact details based on Contact Name
+    contact = frappe.get_doc("Contact", contact_name)
+    return contact
 
-@frappe.whitelist()
-def update_tracking(shipment, service_provider, shipment_id, delivery_notes=[]):
-	# Update Tracking info in Shipment
-	tracking_data = None
-	if service_provider == NOVAPOSHTA_PROVIDER:
-		novaposhta = NovaPoshtaUtils()
-		tracking_data = novaposhta.get_tracking_data(shipment_id)
-	elif service_provider == PACKLINK_PROVIDER:
-		packlink = PackLinkUtils()
-		tracking_data = packlink.get_tracking_data(shipment_id)
-	elif service_provider == SENDCLOUD_PROVIDER:
-		sendcloud = SendCloudUtils()
-		tracking_data = sendcloud.get_tracking_data(shipment_id)
 
-	if tracking_data:
-		fields = ['awb_number', 'tracking_status', 'tracking_status_info', 'tracking_url']
-		for field in fields:
-			frappe.db.set_value('Shipment', shipment, field, tracking_data.get(field))
+def get_company_contact(user):
+    # Get Company Contact details based on User
+    company = frappe.get_doc("User", user).company
+    contact = frappe.get_list("Contact", filters={"company": company}, limit=1)
+    return contact[0] if contact else None
 
-		if delivery_notes:
-			update_delivery_note(delivery_notes=delivery_notes, tracking_info=tracking_data)
 
-def update_delivery_note(delivery_notes, shipment_info=None, tracking_info=None):
-	# Update Shipment Info in Delivery Note
-	# Using db_set since some services might not exist
-	if isinstance(delivery_notes, string_types):
-		delivery_notes = json.loads(delivery_notes)
+def match_parcel_service_type_carrier(prices, keys):
+    # Match Parcel Service, Type, and Carrier names in the list of prices
+    matched_prices = {}
+    for key in keys:
+        matched_prices[key] = []
 
-	delivery_notes = list(set(delivery_notes))
+    for price in prices:
+        for key in keys:
+            if key in price:
+                matched_prices[key].append(price)
 
-	for delivery_note in delivery_notes:
-		dl_doc = frappe.get_doc('Delivery Note', delivery_note)
-		if shipment_info:
-			dl_doc.db_set('delivery_type', 'Parcel Service')
-			dl_doc.db_set('parcel_service', shipment_info.get('carrier'))
-			dl_doc.db_set('parcel_service_type', shipment_info.get('carrier_service'))
-		if tracking_info:
-			dl_doc.db_set('tracking_number', tracking_info.get('awb_number'))
-			dl_doc.db_set('tracking_url', tracking_info.get('tracking_url'))
-			dl_doc.db_set('tracking_status', tracking_info.get('tracking_status'))
-			dl_doc.db_set('tracking_status_info', tracking_info.get('tracking_status_info'))
+    return matched_prices
